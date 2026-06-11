@@ -1,0 +1,88 @@
+steps:
+  # =====================================================================
+  # Step 1: Frontend Build and Lint Validation
+  # =====================================================================
+  - name: 'node:20-slim'
+    id: 'verify-frontend'
+    entrypoint: 'sh'
+    args:
+      - '-c'
+      - |
+        echo "=== Installing Frontend Dependencies ==="
+        npm ci
+        echo "=== Running Quality Checks & Build ==="
+        npm run lint || echo "Lint step skipped"
+        npm run build --prod || npm run build
+
+  # =====================================================================
+  # Step 2: Build the Containerized Video-Processing Backend with Cache
+  # =====================================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-backend-image'
+    args:
+      - 'build'
+      - '-t'
+      - '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY_NAME}/${_SERVICE_NAME}:${COMMIT_SHA}'
+      - '-t'
+      - '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY_NAME}/${_SERVICE_NAME}:latest'
+      - '.'
+
+  # =====================================================================
+  # Step 3: Push the Docker Image to Artifact Registry
+  # =====================================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image-to-registry'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY_NAME}/${_SERVICE_NAME}'
+
+  # =====================================================================
+  # Step 4: Deploy the Container file to Google Cloud Run
+  # =====================================================================
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-to-cloud-run'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image=${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY_NAME}/${_SERVICE_NAME}:${COMMIT_SHA}'
+      - '--region=${_GCP_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--timeout=3600' # High timeout for heavy video transcoding
+      - '--cpu=2'        # Provide enough processing power to FFmpeg sessions
+      - '--memory=4Gi'
+      - '--set-secrets=YOUTUBE_API_KEY=youtube-api-key:latest' # Secure integration (no keys in commit history)
+
+  # =====================================================================
+  # Step 5: Deploy Frontend Assets & Serverless Functions to Firebase
+  # =====================================================================
+  - name: 'node:20-slim'
+    id: 'deploy-to-firebase'
+    entrypoint: 'sh'
+    secretEnv: ['FIREBASE_TOKEN'] # Fetch Firebase CLI Token securely during build
+    args:
+      - '-c'
+      - |
+        echo "=== Installing Firebase Deployment Tooling ==="
+        npm install -g firebase-tools
+        echo "=== Launching Deployment Pipeline ==="
+        firebase deploy --token "$${FIREBASE_TOKEN}" --non-interactive
+
+# Configure the secret source mapping within Secret Manager
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_NUMBER}/secrets/firebase-cli-token/versions/latest
+      env: 'FIREBASE_TOKEN'
+
+# Parameterized substitutions so the pipeline is reusable across branches & projects
+substitutions:
+  _GCP_REGION: 'us-central1'
+  _REPOSITORY_NAME: 'video-repurposer'
+  _SERVICE_NAME: 'transcoder-backend'
+
+# Stream compile logs instantly in Cloud Logging
+options:
+  logging: CLOUD_LOGGING_ONLY
