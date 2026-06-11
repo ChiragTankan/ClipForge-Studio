@@ -1,6 +1,6 @@
 {
-  "name": "CI/CD Deployment Blueprint",
-  "description": "An interactive dashboard and configuration template mapping out the automated video repurposing CI/CD pipeline on GCP, Cloud Run, and Firebase.",
+  "name": "ClipForge Studio",
+  "description": "Advanced single-click YouTube video optimizer and highlight sharing platform.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

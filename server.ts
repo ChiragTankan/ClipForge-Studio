@@ -276,11 +276,8 @@ async function startServer() {
 
       saveSharedClips(clips);
 
-      // Build short URL dynamically
-      const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
-      const protocol = req.headers["x-forwarded-proto"] || "https";
-      
-      const shareUrl = `${protocol}://${host}/?clip=${shortId}`;
+      // Build short URL dynamically with the requested custom root Vercel domain and direct slash subpath
+      const shareUrl = `https://clip-forge-studio-sigma.vercel.app/${shortId}`;
 
       console.log(`[Share] Created share link: ${shareUrl} for ID ${shortId}`);
       return res.json({

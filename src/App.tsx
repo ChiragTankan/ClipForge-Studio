@@ -133,12 +133,14 @@ export default function App() {
   const [loadingSharedClip, setLoadingSharedClip] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
+  const [sharingStates, setSharingStates] = useState<Record<string, { loading?: boolean; url?: string }>>({});
 
   const generateShareLink = async (clip: GeneratedClip) => {
-    if (isSharing) return;
-    setIsSharing(true);
-    setGeneratedShareUrl(null);
-    showToast("Generating short shareable link for this clip...", "info");
+    setSharingStates(prev => ({
+      ...prev,
+      [clip.id]: { loading: true }
+    }));
+    showToast("Generating short link for this segment...", "info");
 
     try {
       const response = await fetch("/api/share-clip", {
@@ -166,13 +168,18 @@ export default function App() {
       }
 
       const data = await response.json();
-      setGeneratedShareUrl(data.shareUrl);
-      showToast("Shareable link generated successfully!", "success");
+      setSharingStates(prev => ({
+        ...prev,
+        [clip.id]: { loading: false, url: data.shareUrl }
+      }));
+      showToast("Short link generated! Ready to copy.", "success");
     } catch (e) {
+      setSharingStates(prev => ({
+        ...prev,
+        [clip.id]: { loading: false }
+      }));
       showToast("Error generating short unique link.", "info");
       console.error(e);
-    } finally {
-      setIsSharing(false);
     }
   };
 
@@ -490,7 +497,17 @@ export default function App() {
   // Check for shared clip parameter on component mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const clipId = params.get("clip");
+    let clipId = params.get("clip");
+    
+    if (!clipId) {
+      // Check path like /sgsdg
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      // Valid sharing ID sits at length 1 and is generally alphanumeric
+      if (pathParts.length === 1 && /^[a-z0-9]+$/i.test(pathParts[0]) && pathParts[0] !== "api") {
+        clipId = pathParts[0];
+      }
+    }
+
     if (clipId) {
       setSharedClipId(clipId);
       const loadClipPayload = async () => {
@@ -1308,15 +1325,65 @@ export default function App() {
                         </div>
 
                         {/* Action buttons (Sharing & Links) */}
-                        <div className="space-y-1.5 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => setExportUiClip(clip)}
-                            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg active:scale-95"
-                          >
-                            <Share2 className="h-3.5 w-3.5 text-white animate-pulse" />
-                            <span>Share Clip & Get Link ({clip.duration}s)</span>
-                          </button>
+                        <div className="space-y-2 pt-2">
+                          {sharingStates[clip.id]?.url ? (
+                            <div className="bg-purple-950/20 border border-purple-500/30 p-3 rounded-xl space-y-2 mt-1 animate-fadeIn text-left">
+                              <div className="text-[10px] text-fuchsia-300 font-bold uppercase tracking-wider flex items-center gap-1">
+                                <CheckCircle className="h-3 w-3 text-emerald-400" />
+                                <span>Shareable Shortlink Generated!</span>
+                              </div>
+                              <div className="flex gap-1.5">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={sharingStates[clip.id].url}
+                                  className="flex-1 bg-[#05010a] text-[10px] font-mono text-purple-200 border border-purple-950 px-2 py-1.5 rounded-lg focus:outline-none select-all"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => triggerCopy(`share-${clip.id}`, sharingStates[clip.id].url || "")}
+                                  className="px-2.5 bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-[10px] font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                                >
+                                  {copiedStates[`share-${clip.id}`] ? "Copied" : "Copy"}
+                                </button>
+                              </div>
+                              <div className="flex justify-between items-center text-[9px] text-stone-400 font-sans">
+                                <span>Loop segment: {clip.startTime}s - {clip.endTime}s</span>
+                                <a
+                                  href={sharingStates[clip.id].url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-purple-400 hover:text-purple-300 transition-colors font-semibold flex items-center gap-0.5"
+                                >
+                                  <span>Test Link</span>
+                                  <ExternalLink className="h-2.5 w-2.5" />
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={sharingStates[clip.id]?.loading}
+                              onClick={() => generateShareLink(clip)}
+                              className={`w-full py-2.5 rounded-xl ${
+                                sharingStates[clip.id]?.loading
+                                  ? "bg-purple-950 cursor-not-allowed text-purple-400 border border-purple-950"
+                                  : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white cursor-pointer active:scale-95 shadow-lg"
+                              } font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all`}
+                            >
+                              {sharingStates[clip.id]?.loading ? (
+                                <>
+                                  <RefreshCw className="h-3.5 w-3.5 text-purple-400 animate-spin" />
+                                  <span>Shortening Link Payload...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Share2 className="h-3.5 w-3.5 text-white animate-pulse" />
+                                  <span>Share Clip & Get Link ({clip.duration}s)</span>
+                                </>
+                              )}
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
