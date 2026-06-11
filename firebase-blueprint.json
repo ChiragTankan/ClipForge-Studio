@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "SharedClip": {
+      "title": "Shared Clip Definition",
+      "description": "A high retention customized repurposed video segment highlighted by a signed-in user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique key constructed as username--slug"
+        },
+        "username": {
+          "type": "string",
+          "description": "Sanitized profile username derived from user email or name"
+        },
+        "slug": {
+          "type": "string",
+          "description": "Readable safe short string segment"
+        },
+        "videoUrl": {
+          "type": "string",
+          "description": "Target source YouTube video URL location"
+        },
+        "title": {
+          "type": "string",
+          "description": "Display custom segment name"
+        },
+        "startTime": {
+          "type": "integer",
+          "description": "Cropping start timeline sequence in seconds"
+        },
+        "endTime": {
+          "type": "integer",
+          "description": "Cropping wrap timestamp in seconds"
+        },
+        "duration": {
+          "type": "string",
+          "description": "Formated window length"
+        },
+        "viralityScore": {
+          "type": "integer",
+          "description": "Calculated retention virality percentage"
+        },
+        "description": {
+          "type": "string",
+          "description": "Dynamic hook summary"
+        },
+        "subtitles": {
+          "type": "array",
+          "description": "Simulated dynamic timing subtitles"
+        },
+        "ratio": {
+          "type": "string",
+          "description": "Display dimension ratio like 9:16"
+        },
+        "color": {
+          "type": "string",
+          "description": "Selection theme gradient styling parameters"
+        },
+        "captionStyle": {
+          "type": "string",
+          "description": "Visual fonts style theme selection"
+        },
+        "userUid": {
+          "type": "string",
+          "description": "Firebase authenticated creator user identifier"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Database document timestamp"
+        }
+      },
+      "required": ["id", "username", "slug", "videoUrl", "title", "startTime", "endTime"]
+    }
+  },
+  "firestore": {
+    "shared_clips/{clipId}": {
+      "schema": "SharedClip",
+      "description": "Public database collection containing the custom shortened share keys."
+    }
+  }
+}

@@ -27,8 +27,14 @@ import {
   SlidersHorizontal,
   ExternalLink,
   Laptop,
-  X
+  X,
+  LogOut,
+  User as UserIcon
 } from "lucide-react";
+
+import { auth, db, googleProvider, signInWithPopup, signOut } from "./firebase";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
 interface GeneratedClip {
   id: string;
@@ -52,6 +58,38 @@ function getYouTubeId(url: string): string {
 }
 
 export default function App() {
+  // Google Authentication State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleGoogleLogin = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user) {
+        showToast(`Signed in successfully as ${result.user.displayName || result.user.email}!`, "success");
+      }
+    } catch (e: any) {
+      console.error("Login trigger error:", e);
+      showToast("Google Authentication failed or was dismissed.", "info");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      showToast("Signed out successfully.", "success");
+    } catch (e: any) {
+      console.error(e);
+      showToast("Error signing out.", "info");
+    }
+  };
+
   // Input settings for YouTubers
   const [videoUrl, setVideoUrl] = useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   const [outputRatio, setOutputRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
@@ -136,49 +174,73 @@ export default function App() {
   const [sharingStates, setSharingStates] = useState<Record<string, { loading?: boolean; url?: string }>>({});
 
   const generateShareLink = async (clip: GeneratedClip) => {
+    if (!currentUser) {
+      showToast("Please authenticate with Google to write shareable short links!", "info");
+      try {
+        const result = await signInWithPopup(auth, googleProvider);
+        if (!result.user) return;
+      } catch (err) {
+        console.error("Popup request aborted:", err);
+        return;
+      }
+    }
+
+    const activeUser = auth.currentUser;
+    if (!activeUser) return;
+
     setSharingStates(prev => ({
       ...prev,
       [clip.id]: { loading: true }
     }));
-    showToast("Generating short link for this segment...", "info");
+    showToast("Constructing custom short link...", "info");
 
     try {
-      const response = await fetch("/api/share-clip", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          videoUrl,
-          title: clip.title,
-          startTime: clip.startTime,
-          endTime: clip.endTime,
-          duration: clip.duration,
-          viralityScore: clip.viralityScore,
-          description: clip.description,
-          subtitles: clip.subtitles,
-          ratio: clip.ratio || outputRatio,
-          color: clip.color,
-          captionStyle,
-        })
-      });
+      // Create user-custom slash segments
+      const rawName = activeUser.displayName || activeUser.email?.split("@")[0] || "creator";
+      const username = rawName.toLowerCase().replace(/[^a-z0-9_]/g, "");
+      
+      const titleSlug = clip.title
+        ? clip.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").substr(0, 30).replace(/^-+|-+$/g, "")
+        : "clip";
+      const randomSuffix = Math.random().toString(36).substring(2, 7);
+      const slug = `${titleSlug}-${randomSuffix}`;
+      const docId = `${username}--${slug}`;
 
-      if (!response.ok) {
-        throw new Error("Failed to store clip.");
-      }
+      const payload = {
+        id: docId,
+        username,
+        slug,
+        videoUrl,
+        title: clip.title,
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        duration: clip.duration,
+        viralityScore: clip.viralityScore,
+        description: clip.description,
+        subtitles: clip.subtitles,
+        ratio: clip.ratio || outputRatio,
+        color: clip.color,
+        captionStyle: captionStyle,
+        userUid: activeUser.uid,
+        createdAt: new Date().toISOString()
+      };
 
-      const data = await response.json();
+      // Direct Firestore write block
+      const docRef = doc(db, "shared_clips", docId);
+      await setDoc(docRef, payload);
+
+      const shareUrl = `${window.location.origin}/${username}/${slug}`;
       setSharingStates(prev => ({
         ...prev,
-        [clip.id]: { loading: false, url: data.shareUrl }
+        [clip.id]: { loading: false, url: shareUrl }
       }));
-      showToast("Short link generated! Ready to copy.", "success");
-    } catch (e) {
+      showToast("Shortlink written to Firestore successfully!", "success");
+    } catch (e: any) {
       setSharingStates(prev => ({
         ...prev,
         [clip.id]: { loading: false }
       }));
-      showToast("Error generating short unique link.", "info");
+      showToast("Failed to write link mapping directly.", "info");
       console.error(e);
     }
   };
@@ -498,26 +560,52 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     let clipId = params.get("clip");
-    
-    if (!clipId) {
-      // Check path like /sgsdg
-      const pathParts = window.location.pathname.split("/").filter(Boolean);
-      // Valid sharing ID sits at length 1 and is generally alphanumeric
-      if (pathParts.length === 1 && /^[a-z0-9]+$/i.test(pathParts[0]) && pathParts[0] !== "api") {
-        clipId = pathParts[0];
-      }
+    let usernamePart: string | null = null;
+    let slugPart: string | null = null;
+
+    const pathParts = window.location.pathname.split("/").filter(Boolean);
+    if (pathParts.length === 2 && pathParts[0] !== "api") {
+      usernamePart = pathParts[0];
+      slugPart = pathParts[1];
+    } else if (pathParts.length === 1 && pathParts[0] !== "api") {
+      clipId = pathParts[0];
     }
 
-    if (clipId) {
-      setSharedClipId(clipId);
+    if (clipId || (usernamePart && slugPart)) {
+      const activeId = clipId || `${usernamePart}--${slugPart}`;
+      setSharedClipId(activeId);
+      
       const loadClipPayload = async () => {
         setLoadingSharedClip(true);
         try {
-          const res = await fetch(`/api/share-clip/${clipId}`);
-          if (!res.ok) {
+          let clipData: any = null;
+
+          if (usernamePart && slugPart) {
+            // Fetch directly from Firestore!
+            const docId = `${usernamePart}--${slugPart}`;
+            const docRef = doc(db, "shared_clips", docId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              clipData = docSnap.data();
+            }
+          } else if (clipId) {
+            // First check Firestore, then fallback to API
+            const docRef = doc(db, "shared_clips", clipId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              clipData = docSnap.data();
+            } else {
+              const res = await fetch(`/api/share-clip/${clipId}`);
+              if (res.ok) {
+                clipData = await res.json();
+              }
+            }
+          }
+
+          if (!clipData) {
             throw new Error("Shared clip not found.");
           }
-          const clipData = await res.json();
+
           setSharedClip(clipData);
           setVideoUrl(clipData.videoUrl);
           setSelectedClip(clipData);
@@ -677,17 +765,48 @@ export default function App() {
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                window.history.pushState({}, '', window.location.pathname);
-                setSharedClipId(null);
-                setSharedClip(null);
-              }}
-              className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-purple-900/30 hover:bg-purple-900/60 border border-purple-800 text-[11px] sm:text-xs text-purple-300 font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <RotateCw className="h-3.5 w-3.5" />
-              <span>Reset & Create Yours</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {currentUser ? (
+                <div className="flex items-center gap-2 bg-purple-950/40 border border-purple-500/30 px-2.5 py-1.5 rounded-xl text-left">
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt="User profile"
+                      referrerPolicy="no-referrer"
+                      className="h-5.5 w-5.5 rounded-full border border-purple-500/50"
+                    />
+                  ) : (
+                    <div className="h-5.5 w-5.5 rounded-full bg-purple-600 flex items-center justify-center text-white text-[10px]">
+                      <UserIcon className="h-3 w-3" />
+                    </div>
+                  )}
+                  <span className="text-[10px] font-bold text-purple-200 hidden sm:inline max-w-[80px] truncate">{currentUser.displayName || currentUser.email}</span>
+                  <button onClick={handleLogout} className="text-purple-400 hover:text-rose-400 transition-colors p-0.5" title="Sign Out">
+                    <LogOut className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleGoogleLogin}
+                  className="px-2.5 py-1.5 rounded-xl border border-purple-500/30 bg-purple-950/20 text-purple-300 font-bold text-[10px] flex items-center gap-1 transition-all hover:bg-purple-950/50 cursor-pointer whitespace-nowrap"
+                >
+                  <UserIcon className="h-3 w-3" />
+                  <span>Google Auth</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  window.history.pushState({}, '', window.location.pathname);
+                  setSharedClipId(null);
+                  setSharedClip(null);
+                }}
+                className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-purple-900/30 hover:bg-purple-900/60 border border-purple-800 text-[11px] sm:text-xs text-purple-300 font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+                <span>Reset & Create Yours</span>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -878,10 +997,50 @@ export default function App() {
             </div>
           </div>
 
-          <p className="text-xs text-neutral-400 hidden md:flex items-center gap-1.5 bg-purple-950/30 border border-purple-500/20 px-3 py-1.5 rounded-full">
-            <Video className="h-3.5 w-3.5 text-purple-400" />
-            <span>Simply paste, crop, view real synchronizations, and export</span>
-          </p>
+          <div className="flex items-center gap-4">
+            <p className="text-xs text-neutral-400 hidden lg:flex items-center gap-1.5 bg-purple-950/30 border border-purple-500/20 px-3 py-1.5 rounded-full">
+              <Video className="h-3.5 w-3.5 text-purple-400" />
+              <span>Simply paste, crop, view real synchronizations, and export</span>
+            </p>
+
+            {currentUser ? (
+              <div className="flex items-center gap-2.5 bg-purple-950/40 border border-purple-500/30 px-3 py-1.5 rounded-xl">
+                {currentUser.photoURL ? (
+                  <img
+                    src={currentUser.photoURL}
+                    alt="User profile"
+                    referrerPolicy="no-referrer"
+                    className="h-6 w-6 rounded-full border border-purple-500/50"
+                  />
+                ) : (
+                  <div className="h-6 w-6 rounded-full bg-purple-600 flex items-center justify-center text-white text-xs">
+                    <UserIcon className="h-3.5 w-3.5" />
+                  </div>
+                )}
+                <div className="text-left hidden sm:block">
+                  <p className="text-[9px] text-[#a78bfa] font-medium leading-none uppercase tracking-wider">Logged in</p>
+                  <p className="text-xs font-bold text-white max-w-[120px] truncate leading-tight mt-0.5">{currentUser.displayName || currentUser.email}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="p-1.5 text-neutral-400 hover:text-rose-400 hover:bg-neutral-900/60 rounded-lg transition-colors cursor-pointer ml-1 animate-none"
+                  title="Sign Out"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap"
+              >
+                <UserIcon className="h-3.5 w-3.5 animate-pulse animate-none" />
+                <span>Continue with Google</span>
+              </button>
+            )}
+          </div>
 
         </div>
       </header>
