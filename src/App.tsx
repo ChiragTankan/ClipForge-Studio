@@ -91,7 +91,7 @@ export default function App() {
   };
 
   // Input settings for YouTubers
-  const [videoUrl, setVideoUrl] = useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  const [videoUrl, setVideoUrl] = useState("");
   const [outputRatio, setOutputRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
   const [captionStyle, setCaptionStyle] = useState<"hormozi" | "beast" | "minimal">("hormozi");
   const [clipLength, setClipLength] = useState<"auto" | "30" | "60">("auto");
@@ -240,8 +240,9 @@ export default function App() {
         ...prev,
         [clip.id]: { loading: false }
       }));
-      showToast("Failed to write link mapping directly.", "info");
-      console.error(e);
+      const errorMsg = e?.message || String(e);
+      showToast(`Link generation failed: ${errorMsg}`, "info");
+      console.error("Link generation failure detail:", e);
     }
   };
 
@@ -613,12 +614,10 @@ export default function App() {
           setShowResults(true);
         } catch (err) {
           console.error("Shared clip loading error:", err);
-          showToast("Shared clip has expired or was not found.", "info");
-          // load defaults instead
-          const defaultClips = generateFallbackClips("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "9:16");
-          setClips(defaultClips);
-          setSelectedClip(defaultClips[0]);
-          setShowResults(true);
+          showToast("Shared clip was not found or has expired.", "info");
+          setClips([]);
+          setSelectedClip(null);
+          setShowResults(false);
           setSharedClipId(null);
         } finally {
           setLoadingSharedClip(false);
@@ -626,10 +625,9 @@ export default function App() {
       };
       loadClipPayload();
     } else {
-      const defaultClips = generateFallbackClips("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "9:16");
-      setClips(defaultClips);
-      setSelectedClip(defaultClips[0]);
-      setShowResults(true);
+      setClips([]);
+      setSelectedClip(null);
+      setShowResults(false);
     }
   }, []);
 
@@ -1068,8 +1066,31 @@ export default function App() {
         </section>
 
         {/* Dynamic User Input Form */}
-        <section className="max-w-3xl mx-auto bg-neutral-950/60 rounded-3xl border border-purple-950/50 p-6 sm:p-8 backdrop-blur-md shadow-2xl relative">
+        <section className="max-w-3xl mx-auto bg-neutral-950/60 rounded-3xl border border-purple-950/50 p-6 sm:p-8 backdrop-blur-md shadow-2xl relative overflow-hidden">
           
+          {/* Auth Gate Overlay */}
+          {!currentUser && (
+            <div className="absolute inset-0 bg-[#060212]/92 backdrop-blur-md z-30 flex flex-col items-center justify-center p-6 text-center animate-fadeIn">
+              <div className="h-14 w-14 rounded-2xl bg-gradient-to-tr from-purple-600 to-fuchsia-600 flex items-center justify-center text-white shadow-[0_0_30px_rgba(168,85,247,0.5)] mb-4">
+                <Sparkles className="h-7 w-7 text-white animate-pulse" />
+              </div>
+              <h3 className="text-xl font-extrabold text-white tracking-tight">
+                Continue with Google to Start
+              </h3>
+              <p className="text-xs sm:text-sm text-neutral-400 max-w-sm mt-2 mb-6 leading-relaxed">
+                Connect your account to paste and repurpose your own YouTube videos, design overlays, and generate durable shortlinks instantly.
+              </p>
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                className="px-6 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95"
+              >
+                <UserIcon className="h-4.5 w-4.5" />
+                <span>Continue with Google</span>
+              </button>
+            </div>
+          )}
+
           <div className="absolute top-0 right-0 p-3 text-[9px] text-fuchsia-400/50 font-mono tracking-wider uppercase">
             Active Video Parser Mode
           </div>
@@ -1084,7 +1105,7 @@ export default function App() {
                   <span>Enter long YouTube Video Link</span>
                 </label>
                 <div className="text-[11px] text-neutral-400 flex items-center gap-1">
-                  <span>Enter URL or select standard preset below</span>
+                  <span>Paste your own custom video URL</span>
                 </div>
               </div>
 
@@ -1095,18 +1116,11 @@ export default function App() {
                 <input
                   type="text"
                   required
-                  placeholder="https://www.youtube.com/watch?v=27tS5vXhU5I"
+                  placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ"
                   value={videoUrl}
                   onChange={(e) => setVideoUrl(e.target.value)}
-                  className="w-full bg-[#05010d] border border-purple-950 rounded-2xl pl-11 pr-24 py-3.5 text-xs sm:text-sm font-sans text-white placeholder-neutral-600 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all shadow-inner"
+                  className="w-full bg-[#05010d] border border-purple-950 rounded-2xl pl-11 pr-4 py-3.5 text-xs sm:text-sm font-sans text-white placeholder-neutral-600 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all shadow-inner"
                 />
-                <button
-                  type="button"
-                  onClick={() => setVideoUrl("https://www.youtube.com/watch?v=27tS5vXhU5I")}
-                  className="absolute right-2 top-2 px-3 py-1.5 rounded-xl bg-purple-900/30 border border-purple-800 text-[11px] text-purple-300 font-semibold hover:bg-purple-900/60 transition-colors"
-                >
-                  Load Preset
-                </button>
               </div>
 
               {/* Quick links preset row removed as requested by focus selections */}
