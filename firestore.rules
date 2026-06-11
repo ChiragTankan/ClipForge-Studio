@@ -16,8 +16,8 @@ service cloud.firestore {
       // Custom shortlink shares must be publicly readable by anyone accessing the link
       allow read, list: if true;
       
-      // Creating is restricted to logged-in users
-      allow create: if isSignedIn() && request.resource.data.userUid == request.auth.uid;
+      // Allow any user (including guests) to create links so the application works seamlessly in iframes
+      allow create: if true;
       
       // Updates and deletions are allowed only by the original creator
       allow update, delete: if isSignedIn() && resource.data.userUid == request.auth.uid;

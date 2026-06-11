@@ -15,6 +15,7 @@ import {
   Clock,
   Zap,
   Play,
+  Pause,
   RotateCw,
   TrendingUp,
   Sliders,
@@ -168,25 +169,76 @@ export default function App() {
   // States for short link sharer
   const [sharedClipId, setSharedClipId] = useState<string | null>(null);
   const [sharedClip, setSharedClip] = useState<any | null>(null);
+  const [sharedIsPlaying, setSharedIsPlaying] = useState(true);
+  const [sharedHasError, setSharedHasError] = useState(false);
   const [loadingSharedClip, setLoadingSharedClip] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
   const [sharingStates, setSharingStates] = useState<Record<string, { loading?: boolean; url?: string }>>({});
 
+  // Listen for iframe messages on the shared clip page to detect errors or end-of-video boundaries
+  useEffect(() => {
+    if (!sharedClipId || !sharedClip) return;
+
+    const handleSharedMessage = (event: MessageEvent) => {
+      const iframe = document.getElementById("shared-youtube-iframe") as HTMLIFrameElement | null;
+      if (!iframe || event.source !== iframe.contentWindow) return;
+
+      try {
+        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        if (data && data.event === "infoDelivery" && data.info) {
+          const info = data.info;
+
+          // Catch 101/150/153 embedding restriction errors or general errors
+          if (
+            typeof info.error === "number" ||
+            info.errorCode === "html5_player_error" ||
+            info.error === 150 ||
+            info.error === 101 ||
+            info.error === 153 ||
+            info.error === 5
+          ) {
+            console.warn("YouTube Player sent embed error:", info.error || info.errorCode);
+            setSharedHasError(true);
+          }
+
+          // Force looping boundaries manually
+          if (typeof info.currentTime === "number") {
+            if (info.currentTime >= sharedClip.endTime) {
+              iframe.contentWindow.postMessage(
+                JSON.stringify({ event: "command", func: "seekTo", args: [sharedClip.startTime, true] }),
+                "*"
+              );
+            }
+          }
+        }
+      } catch (err) {
+        // Fail-safe
+      }
+    };
+
+    window.addEventListener("message", handleSharedMessage);
+    return () => {
+      window.removeEventListener("message", handleSharedMessage);
+    };
+  }, [sharedClipId, sharedClip]);
+
   const generateShareLink = async (clip: GeneratedClip) => {
-    if (!currentUser) {
-      showToast("Please authenticate with Google to write shareable short links!", "info");
+    let activeUser = auth.currentUser || currentUser;
+    
+    // Attempt login if not authenticated, but don't force or fail if cancelled
+    if (!activeUser) {
+      showToast("Authenticating with Google... (Sign-in optional)", "info");
       try {
         const result = await signInWithPopup(auth, googleProvider);
-        if (!result.user) return;
+        if (result.user) {
+          activeUser = result.user;
+        }
       } catch (err) {
-        console.error("Popup request aborted:", err);
-        return;
+        console.warn("Sign-in popup bypassed or blocked, generating link as Guest:", err);
+        showToast("Generating link as Guest...", "info");
       }
     }
-
-    const activeUser = auth.currentUser;
-    if (!activeUser) return;
 
     setSharingStates(prev => ({
       ...prev,
@@ -195,9 +247,9 @@ export default function App() {
     showToast("Constructing custom short link...", "info");
 
     try {
-      // Create user-custom slash segments
-      const rawName = activeUser.displayName || activeUser.email?.split("@")[0] || "creator";
-      const username = rawName.toLowerCase().replace(/[^a-z0-9_]/g, "");
+      // Create user-custom or guest slash segments
+      const rawName = activeUser ? (activeUser.displayName || activeUser.email?.split("@")[0] || "creator") : "guest";
+      const username = rawName.toLowerCase().replace(/[^a-z0-9_]/g, "") || "guest";
       
       const titleSlug = clip.title
         ? clip.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").substr(0, 30).replace(/^-+|-+$/g, "")
@@ -221,7 +273,7 @@ export default function App() {
         ratio: clip.ratio || outputRatio,
         color: clip.color,
         captionStyle: captionStyle,
-        userUid: activeUser.uid,
+        userUid: activeUser ? activeUser.uid : "guest",
         createdAt: new Date().toISOString()
       };
 
@@ -737,6 +789,63 @@ export default function App() {
   }
 
   if (sharedClipId && sharedClip) {
+    const toggleSharedPlayback = () => {
+      const iframe = document.getElementById("shared-youtube-iframe") as HTMLIFrameElement | null;
+      if (!iframe?.contentWindow) return;
+
+      if (sharedIsPlaying) {
+        try {
+          iframe.contentWindow.postMessage(
+            JSON.stringify({ event: "command", func: "pauseVideo" }),
+            "*"
+          );
+          setSharedIsPlaying(false);
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        try {
+          iframe.contentWindow.postMessage(
+            JSON.stringify({ event: "command", func: "playVideo" }),
+            "*"
+          );
+          iframe.contentWindow.postMessage(
+            JSON.stringify({ event: "command", func: "unMute" }),
+            "*"
+          );
+          iframe.contentWindow.postMessage(
+            JSON.stringify({ event: "command", func: "setVolume", args: [100] }),
+            "*"
+          );
+          setSharedIsPlaying(true);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    };
+
+    // Auto-unmute shared video player shortly after load as a fail-safe
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        const iframe = document.getElementById("shared-youtube-iframe") as HTMLIFrameElement | null;
+        if (iframe?.contentWindow) {
+          try {
+            iframe.contentWindow.postMessage(
+              JSON.stringify({ event: "command", func: "unMute" }),
+              "*"
+            );
+            iframe.contentWindow.postMessage(
+              JSON.stringify({ event: "command", func: "setVolume", args: [100] }),
+              "*"
+            );
+          } catch (e) {
+            // fail-safe
+          }
+        }
+      }, 1000);
+      return () => clearTimeout(timer);
+    }, [sharedClipId, sharedClip]);
+
     return (
       <div className="min-h-screen bg-[#03000a] text-[#f5f3ff] flex flex-col font-sans selection:bg-purple-600/40 selection:text-purple-200">
         {/* Glow effects in the background */}
@@ -798,6 +907,8 @@ export default function App() {
                   window.history.pushState({}, '', window.location.pathname);
                   setSharedClipId(null);
                   setSharedClip(null);
+                  setSharedHasError(false);
+                  setSharedIsPlaying(true);
                 }}
                 className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-purple-900/30 hover:bg-purple-900/60 border border-purple-800 text-[11px] sm:text-xs text-purple-300 font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
               >
@@ -809,25 +920,69 @@ export default function App() {
         </header>
 
         {/* Content Area */}
-        <main className="flex-1 max-w-4xl w-full mx-auto px-6 py-12 relative z-10 flex flex-col md:flex-row gap-8 items-center justify-center">
+        <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-12 relative z-10 flex flex-col md:flex-row gap-8 items-center justify-center">
           
-          {/* Vertical 9:16 Video Player Container */}
-          <div className="w-full max-w-[320px] aspect-[9/16] bg-[#0c0520] border-2 border-purple-500/30 rounded-[32px] overflow-hidden shadow-2xl relative flex flex-col shrink-0">
+          {/* Vertical 9:16 Video Player Container - ENLARGED */}
+          <div className="w-full max-w-[380px] sm:max-w-[440px] aspect-[9/16] bg-[#0c0520] border-2 border-purple-500/30 rounded-[32px] overflow-hidden shadow-2xl relative flex flex-col shrink-0">
             {/* Top Device Notch */}
             <div className="absolute top-0 inset-x-0 h-6 bg-black/40 z-10 flex items-center justify-center">
               <div className="w-16 h-3 bg-neutral-900 rounded-full border border-white/5" />
             </div>
 
             {/* Simulated Live Caption Subtitles overlay container */}
-            <div className="flex-1 w-full relative group">
+            <div className="flex-1 w-full relative overflow-hidden group bg-black">
               <iframe
                 id="shared-youtube-iframe"
-                src={`https://www.youtube.com/embed/${getYouTubeId(sharedClip.videoUrl)}?autoplay=1&mute=1&playlist=${getYouTubeId(sharedClip.videoUrl)}&loop=1&start=${sharedClip.startTime}&end=${sharedClip.endTime}&controls=0`}
-                className="w-full h-full scale-[1.3] origin-center object-cover select-none pointer-events-none"
+                src={`https://www.youtube.com/embed/${getYouTubeId(sharedClip.videoUrl)}?autoplay=1&mute=0&playlist=${getYouTubeId(sharedClip.videoUrl)}&loop=1&start=${sharedClip.startTime}&end=${sharedClip.endTime}&controls=0&modestbranding=1&rel=0&enablejsapi=1&iv_load_policy=3&showinfo=0&disablekb=1&fs=0&origin=${window.location.origin}`}
+                className="absolute border-0 select-none pointer-events-none"
+                style={{
+                  width: "364%",
+                  height: "116%",
+                  left: "-132%",
+                  top: "-8%",
+                  pointerEvents: "none"
+                }}
                 title="Shared Segment Teaser Player"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 referrerPolicy="no-referrer"
               />
+
+              {sharedHasError && (
+                <div className="absolute inset-0 bg-[#0e0a24]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-30">
+                  <div className="h-14 w-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-4 animate-pulse">
+                    <Zap className="h-7 w-7" />
+                  </div>
+                  <h4 className="text-base font-extrabold text-white tracking-tight mb-2">Embed Restricted by YouTube</h4>
+                  <p className="text-xs text-purple-200/70 max-w-[240px] leading-relaxed mb-6">
+                    This video contains licensed music content and is restricted from external iframe playback by label copyright parameters.
+                  </p>
+                  <a
+                    href={`https://www.youtube.com/watch?v=${getYouTubeId(sharedClip.videoUrl)}&t=${sharedClip.startTime}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 font-extrabold text-xs text-white hover:from-purple-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-purple-500/30 flex items-center gap-2 cursor-pointer relative z-40"
+                  >
+                    <span>Watch Clip on YouTube</span>
+                    <Sparkles className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              )}
+
+              {/* Secure HUD overlays for custom play/pause execution to completely hide YouTube controls */}
+              <div 
+                onClick={toggleSharedPlayback}
+                className="absolute inset-0 bg-black/0 hover:bg-black/25 flex items-center justify-center cursor-pointer transition-all duration-300 z-20 group/play"
+              >
+                {!sharedIsPlaying ? (
+                  <div className="h-14 w-14 rounded-full bg-purple-600 shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center text-white scale-95 group-hover/play:scale-100 transition-all duration-300">
+                    <Play className="h-6 w-6 fill-current ml-1" />
+                  </div>
+                ) : (
+                  <div className="h-14 w-14 rounded-full bg-black/30 backdrop-blur-xs border border-white/10 flex items-center justify-center text-white opacity-0 group-hover/play:opacity-100 scale-95 group-hover/play:scale-100 transition-all duration-300">
+                    <Pause className="h-6 w-6 fill-current" />
+                  </div>
+                )}
+              </div>
 
               {/* High Retention Floating Captions Simulation Overlay */}
               <div className="absolute inset-x-4 bottom-24 z-10 pointer-events-none text-center">
@@ -1068,28 +1223,7 @@ export default function App() {
         {/* Dynamic User Input Form */}
         <section className="max-w-3xl mx-auto bg-neutral-950/60 rounded-3xl border border-purple-950/50 p-6 sm:p-8 backdrop-blur-md shadow-2xl relative overflow-hidden">
           
-          {/* Auth Gate Overlay */}
-          {!currentUser && (
-            <div className="absolute inset-0 bg-[#060212]/92 backdrop-blur-md z-30 flex flex-col items-center justify-center p-6 text-center animate-fadeIn">
-              <div className="h-14 w-14 rounded-2xl bg-gradient-to-tr from-purple-600 to-fuchsia-600 flex items-center justify-center text-white shadow-[0_0_30px_rgba(168,85,247,0.5)] mb-4">
-                <Sparkles className="h-7 w-7 text-white animate-pulse" />
-              </div>
-              <h3 className="text-xl font-extrabold text-white tracking-tight">
-                Continue with Google to Start
-              </h3>
-              <p className="text-xs sm:text-sm text-neutral-400 max-w-sm mt-2 mb-6 leading-relaxed">
-                Connect your account to paste and repurpose your own YouTube videos, design overlays, and generate durable shortlinks instantly.
-              </p>
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                className="px-6 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95"
-              >
-                <UserIcon className="h-4.5 w-4.5" />
-                <span>Continue with Google</span>
-              </button>
-            </div>
-          )}
+          {/* Auth Gate Overlay removed for frictionless iframe operation */}
 
           <div className="absolute top-0 right-0 p-3 text-[9px] text-fuchsia-400/50 font-mono tracking-wider uppercase">
             Active Video Parser Mode
@@ -2009,6 +2143,8 @@ function YouTubeFramePlayer({
 }) {
   const iframeRef = React.useRef<HTMLIFrameElement>(null);
   const videoId = getYouTubeId(videoUrl);
+  const isCurrentlyPlaying = activePlayingId === clip.id;
+  const [hasEmbedError, setHasEmbedError] = useState(false);
 
   // Monitor playback coordination across siblings
   useEffect(() => {
@@ -2024,6 +2160,11 @@ function YouTubeFramePlayer({
     }
   }, [activePlayingId, clip.id]);
 
+  // Reset embed error status whenever active clip selection changes
+  useEffect(() => {
+    setHasEmbedError(false);
+  }, [clip.id]);
+
   // Sync auto pause limits
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -2033,6 +2174,19 @@ function YouTubeFramePlayer({
         const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
         if (data && data.event === "infoDelivery" && data.info) {
           const info = data.info;
+
+          // Catch embed play restrictions
+          if (
+            typeof info.error === "number" ||
+            info.errorCode === "html5_player_error" ||
+            info.error === 150 ||
+            info.error === 101 ||
+            info.error === 153 ||
+            info.error === 5
+          ) {
+            console.warn("Home Player received embed error code:", info.error || info.errorCode);
+            setHasEmbedError(true);
+          }
 
           // Detect active playing transitions
           if (info.playerState === 1) { // 1 is Playing
@@ -2069,21 +2223,125 @@ function YouTubeFramePlayer({
     };
   }, [clip.id, clip.startTime, clip.endTime, activePlayingId, setActivePlayingId]);
 
-  let aspectClass = "aspect-[9/16] max-w-[180px]";
-  if (aspectRatio === "1:1") aspectClass = "aspect-square max-w-[200px]";
-  if (aspectRatio === "16:9") aspectClass = "aspect-video w-full";
+  const togglePlayback = () => {
+    if (!iframeRef.current?.contentWindow) return;
+
+    if (isCurrentlyPlaying) {
+      try {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: "command", func: "pauseVideo" }),
+          "*"
+        );
+        setActivePlayingId(null);
+      } catch (err) {
+        console.error("Error pausing video", err);
+      }
+    } else {
+      try {
+        setActivePlayingId(clip.id);
+        setTimeout(() => {
+          if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: "command", func: "playVideo" }),
+              "*"
+            );
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: "command", func: "unMute" }),
+              "*"
+            );
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: "command", func: "setVolume", args: [100] }),
+              "*"
+            );
+          }
+        }, 50);
+      } catch (err) {
+        console.error("Error playing video", err);
+      }
+    }
+  };
+
+  let aspectClass = "aspect-[9/16] max-w-[320px] sm:max-w-[360px]";
+  let iframeStyle: React.CSSProperties = {
+    position: "absolute",
+    border: "0",
+    pointerEvents: "none",
+  };
+
+  if (aspectRatio === "9:16") {
+    aspectClass = "aspect-[9/16] max-w-[320px] sm:max-w-[360px]";
+    iframeStyle = {
+      ...iframeStyle,
+      width: "364%",
+      height: "116%",
+      left: "-132%",
+      top: "-8%",
+    };
+  } else if (aspectRatio === "1:1") {
+    aspectClass = "aspect-square max-w-[340px] sm:max-w-[380px]";
+    iframeStyle = {
+      ...iframeStyle,
+      width: "206%",
+      height: "116%",
+      left: "-53%",
+      top: "-8%",
+    };
+  } else {
+    aspectClass = "aspect-video w-full max-w-[680px]";
+    iframeStyle = {
+      ...iframeStyle,
+      width: "116%",
+      height: "116%",
+      left: "-8%",
+      top: "-8%",
+    };
+  }
 
   return (
     <div className={`w-full ${aspectClass} bg-[#060212] border border-purple-900/50 rounded-2xl relative overflow-hidden shadow-2xl transition-all duration-300 p-2`}>
       <div className="w-full h-full relative rounded-xl overflow-hidden bg-black">
         <iframe
           ref={iframeRef}
-          src={`https://www.youtube.com/embed/${videoId}?start=${clip.startTime}&end=${clip.endTime}&enablejsapi=1&autoplay=0&mute=1&controls=1&modestbranding=1&rel=0&origin=${window.location.origin}`}
-          className="w-full h-full absolute inset-0 border-0"
+          src={`https://www.youtube.com/embed/${videoId}?start=${clip.startTime}&end=${clip.endTime}&enablejsapi=1&autoplay=0&mute=0&playlist=${videoId}&loop=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&showinfo=0&disablekb=1&fs=0&origin=${window.location.origin}`}
+          style={iframeStyle}
           title={clip.title}
           allow="autoplay; encrypted-media"
-          allowFullScreen
         />
+
+        {hasEmbedError && (
+          <div className="absolute inset-0 bg-[#0e0a24]/95 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center z-20">
+            <Zap className="h-6 w-6 text-amber-500 mb-2 animate-pulse" />
+            <span className="text-[11px] font-extrabold text-white uppercase tracking-wider mb-1">Restricted Playback</span>
+            <p className="text-[10px] text-purple-200/60 max-w-[180px] leading-relaxed mb-3">
+              This video contains copyrighted audio restricted from third-party iframe embedding.
+            </p>
+            <a
+              href={`https://www.youtube.com/watch?v=${videoId}&t=${clip.startTime}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-[9px] font-bold text-white transition-all shadow-md flex items-center gap-1 cursor-pointer"
+            >
+              <span>Watch on YouTube</span>
+              <Sparkles className="h-3 w-3" />
+            </a>
+          </div>
+        )}
+
+        {/* Pointer action overlay for clicking on video card to start/pause */}
+        <div 
+          onClick={togglePlayback}
+          className="absolute inset-0 bg-black/0 hover:bg-black/25 flex items-center justify-center cursor-pointer transition-all duration-300 z-10 group/play"
+        >
+          {!isCurrentlyPlaying ? (
+            <div className="h-12 w-12 rounded-full bg-purple-600/90 shadow-md flex items-center justify-center text-white scale-90 group-hover/play:scale-100 transition-all duration-300">
+              <Play className="h-5 w-5 fill-current ml-0.5" />
+            </div>
+          ) : (
+            <div className="h-12 w-12 rounded-full bg-black/40 border border-white/10 flex items-center justify-center text-white opacity-0 group-hover/play:opacity-100 scale-90 group-hover/play:scale-100 transition-all duration-300">
+              <Pause className="h-5 w-5 fill-current" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
