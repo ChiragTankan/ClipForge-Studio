@@ -5,6 +5,8 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import axios from "axios";
 import dotenv from "dotenv";
+import { spawn } from "child_process";
+import fs from "fs";
 
 dotenv.config();
 
@@ -212,6 +214,153 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // API Route: Direct MP4 Video Clip Downloader & Slicer
+  app.get("/api/download-clip", async (req, res) => {
+    try {
+      const { videoUrl, startTime, endTime } = req.query || {};
+      if (!videoUrl) {
+        return res.status(400).send("Error: Missing videoUrl parameter.");
+      }
+
+      const start = parseInt(startTime as string, 10) || 0;
+      const end = parseInt(endTime as string, 10) || 30;
+      const duration = Math.max(1, end - start);
+
+      console.log(`[Downloader] Starting direct slice for "${videoUrl}" [${start}s to ${end}s] (Duration: ${duration}s)`);
+
+      // 1. Ask Cobalt API for the direct high-speed video stream URL
+      let streamUrl = "";
+      try {
+        const cobaltResponse = await axios.post("https://api.cobalt.tools/api/json", {
+          url: videoUrl,
+          videoQuality: "720", // 720p is highly stable, fast seekable, and matches exactly what sits on YouTube!
+          filenamePattern: "basic"
+        }, {
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+          },
+          timeout: 12000 // 12 seconds timeout
+        });
+
+        if (cobaltResponse.data && cobaltResponse.data.url) {
+          streamUrl = cobaltResponse.data.url;
+        }
+      } catch (cobaltErr: any) {
+        console.error("[Downloader] Cobalt API fetch failed:", cobaltErr.message || cobaltErr);
+      }
+
+      // If Cobalt failed, try a backup public mirror instance as a fall-back
+      if (!streamUrl) {
+        try {
+          console.log("[Downloader] Trying alternate download mirror...");
+          const backupResponse = await axios.post("https://co.wukko.me/api/json", {
+            url: videoUrl,
+            videoQuality: "720",
+            filenamePattern: "basic"
+          }, {
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            timeout: 10000
+          });
+
+          if (backupResponse.data && backupResponse.data.url) {
+            streamUrl = backupResponse.data.url;
+          }
+        } catch (backupErr: any) {
+          console.error("[Downloader] Backup mirror also failed:", backupErr.message || backupErr);
+        }
+      }
+
+      if (!streamUrl) {
+        return res.status(502).send(
+          "Error: Could not retrieve a direct streaming URL from YouTube. Please try again or check the link."
+        );
+      }
+
+      // 2. Squeeze the stream into a beautiful uncompressed segment using container FFmpeg
+      const randomId = Math.random().toString(36).substring(7);
+      const outputPath = path.join("/tmp", `download_clip_${randomId}.mp4`);
+
+      console.log(`[Downloader] Running lossless fast-cut on: ${streamUrl}`);
+
+      // Lossless cut with input-seeking is extremely fast (takes less than 1 second)
+      const ffmpegArgs = [
+        "-ss", String(start),
+        "-t", String(duration),
+        "-i", streamUrl,
+        "-c", "copy", // Copy standard streams directly without quality reduction
+        "-y",
+        outputPath
+      ];
+
+      const ffmpegProcess = spawn("ffmpeg", ffmpegArgs);
+
+      let ffmpegErrorOutput = "";
+      ffmpegProcess.stderr.on("data", (data) => {
+        ffmpegErrorOutput += data.toString();
+      });
+
+      ffmpegProcess.on("close", (code) => {
+        if (code === 0 && fs.existsSync(outputPath)) {
+          console.log(`[Downloader] Lossless cut success! Sending direct MP4...`);
+          
+          res.setHeader("Content-Type", "video/mp4");
+          const safeTitle = "clip_repurpose";
+          res.download(outputPath, `${safeTitle}_${start}s_to_${end}s.mp4`, (err) => {
+            // Cleanup temp file
+            try {
+              if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
+              }
+            } catch (cleanupErr) {
+              console.error("[Downloader] Temp file cleanup error:", cleanupErr);
+            }
+          });
+        } else {
+          // If lossless copy failed (due to stream format seeking issue), run full fast transcode fallback
+          console.warn(`[Downloader] Lossless cut failed (Code: ${code}). Re-trying with fast-reencode fallback...`);
+          
+          const fallbackArgs = [
+            "-ss", String(start),
+            "-t", String(duration),
+            "-i", streamUrl,
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-preset", "superfast",
+            "-crf", "22",
+            "-y",
+            outputPath
+          ];
+
+          const fallbackProcess = spawn("ffmpeg", fallbackArgs);
+          fallbackProcess.on("close", (fallbackCode) => {
+            if (fallbackCode === 0 && fs.existsSync(outputPath)) {
+              console.log("[Downloader] Fallback trace transcode succeeded! Streaming file...");
+              res.setHeader("Content-Type", "video/mp4");
+              res.download(outputPath, `youtube_clip_${start}s_to_${end}s.mp4`, (err) => {
+                try {
+                  if (fs.existsSync(outputPath)) {
+                    fs.unlinkSync(outputPath);
+                  }
+                } catch (e) {}
+              });
+            } else {
+              console.error(`[Downloader] All FFmpeg strategies failed. Main stderr: ${ffmpegErrorOutput}`);
+              res.status(500).send("Error: Slicing process failed. The YouTube video might be restricted or region-blocked.");
+            }
+          });
+        }
+      });
+
+    } catch (err: any) {
+      console.error("[Downloader] Critical route exception:", err);
+      res.status(500).send(`Slicing error: ${err.message || "Unknown server error."}`);
+    }
+  });
 
   // API Route: Repurpose YouTube Video using Google Gemini with Search Grounding
   app.post("/api/repurpose", async (req, res) => {

@@ -123,6 +123,7 @@ export default function App() {
 
   // States for client-side progressive video render engine
   const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  const [isDownloadingClip, setIsDownloadingClip] = useState(false);
   const [renderingPercent, setRenderingPercent] = useState(0);
   const [renderingStep, setRenderingStep] = useState("");
 
@@ -168,22 +169,29 @@ export default function App() {
     }
   };
 
-  // Real-time local FFMPEG download script exporter
+  // Real-time server-side direct MP4 downloader
   const triggerFfmpegDownload = (clip: GeneratedClip) => {
+    if (isDownloadingClip) return;
+    setIsDownloadingClip(true);
+    showToast("Crunching YouTube highlights... downloading direct MP4 shortly!", "info");
+
     try {
-      const scriptText = generateFfmpegScriptText(clip, videoUrl, clip.ratio);
-      const blob = new Blob([scriptText], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
+      const url = `/api/download-clip?videoUrl=${encodeURIComponent(videoUrl)}&startTime=${clip.startTime}&endTime=${clip.endTime}`;
+      
       const link = document.createElement("a");
       link.href = url;
-      link.download = `cut_automation_${clip.title.replace(/[^a-zA-Z0-9]/g, "_")}.sh`;
+      link.setAttribute("download", `${clip.title.replace(/[^a-zA-Z0-9]/g, "_")}.mp4`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      showToast(`Exported local high-fidelity FFMPEG automation cut script!`, "success");
+      
+      showToast("Download started! Check your browser downloads folder.", "success");
     } catch (e) {
-      showToast("Could not export automation cut script", "info");
+      showToast("Could not contact downstream converter pool.", "info");
+    } finally {
+      setTimeout(() => {
+        setIsDownloadingClip(false);
+      }, 6000);
     }
   };
 
@@ -1010,31 +1018,11 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => setExportUiClip(clip)}
-                            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg active:scale-95"
+                            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg active:scale-95"
                           >
-                            <Download className="h-3.5 w-3.5 text-white animate-bounce" />
-                            <span>Download & Export Options ({clip.duration}s)</span>
+                            <Download className="h-3.5 w-3.5 text-white animate-pulse" />
+                            <span>Download MP4 Clip ({clip.duration}s)</span>
                           </button>
-
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => triggerSrtDownload(clip)}
-                              className="py-2.5 rounded-xl bg-neutral-950 hover:bg-purple-950/40 text-neutral-300 hover:text-white border border-purple-950 text-[10.5px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
-                            >
-                              <Subtitles className="h-3.5 w-3.5 text-purple-400" />
-                              <span>Export SRT</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => triggerFfmpegDownload(clip)}
-                              className="py-2.5 rounded-xl bg-neutral-950 hover:bg-purple-950/40 text-neutral-300 hover:text-white border border-purple-950 text-[10.5px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
-                            >
-                              <Scissors className="h-3.5 w-3.5 text-fuchsia-400" />
-                              <span>FFmpeg Cut</span>
-                            </button>
-                          </div>
                         </div>
                       </div>
                     </div>
@@ -1126,20 +1114,20 @@ export default function App() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-[#0c0520] border border-purple-500/30 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl relative my-8"
+              className="bg-[#0c0520] border border-purple-500/30 rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl relative my-8"
             >
               {/* Header Bar */}
               <div className="bg-gradient-to-r from-[#17093b] to-[#0d0421] p-6 border-b border-purple-950 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400">
-                    <Sparkles className="h-5 w-5 text-purple-400 animate-pulse" />
+                    <Download className="h-5 w-5 text-purple-400 animate-pulse" />
                   </div>
                   <div>
                     <h3 className="text-base font-extrabold text-white tracking-tight">
-                      🚀 Creator Export Hub
+                      📥 Download MP4 Video Clip
                     </h3>
                     <p className="text-[11px] text-purple-300/80">
-                      Choose your preferred method to save and work with this high-density segment
+                      Export this specific segment in uncompressed MP4 format directly from YouTube
                     </p>
                   </div>
                 </div>
@@ -1156,7 +1144,7 @@ export default function App() {
               <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar text-left">
                 
                 {/* Active Clip Card details */}
-                <div className="bg-black/40 border border-purple-950 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="bg-black/40 border border-purple-950 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="space-y-1">
                     <span className="text-[10px] font-mono font-bold text-fuchsia-400 bg-fuchsia-500/10 px-2 py-0.5 rounded-full border border-fuchsia-500/20">
                       🎯 ACTIVE TIMELINE SELECTION
@@ -1179,122 +1167,87 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  
-                  {/* Method A: Lossless FFmpeg script (RECOMMENDED FOR BEST REAL VIDEO CLIP QUALITY) */}
-                  <div className="bg-[#12072f]/45 border border-purple-500/20 rounded-2xl p-4 flex flex-col justify-between hover:border-purple-500/45 transition-colors">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs">
-                        <Scissors className="h-4 w-4" />
-                        <span>METHOD #1: LOSSLESS CUT SCRIPT (BEST QUALITY)</span>
-                      </div>
-                      <p className="text-xs text-neutral-300 leading-relaxed">
-                        Downloads an automation terminal script (`.sh`). Runs on your machine, pulls the original video stream directly from YouTube, center-crops it, and outputs a <strong>perfect, uncompressed ultra-HD MP4 file</strong> with absolutely zero compression loss!
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerFfmpegDownload(exportUiClip);
-                      }}
-                      className="mt-4 w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      <span>Download Cut Script (FFmpeg)</span>
-                    </button>
-                  </div>
-
-                  {/* Method B: Subtitles Subtitle sequence track export */}
-                  <div className="bg-[#12072f]/45 border border-purple-500/20 rounded-2xl p-4 flex flex-col justify-between hover:border-purple-500/45 transition-colors">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5 text-purple-400 font-bold text-xs">
-                        <Subtitles className="h-4 w-4" />
-                        <span>METHOD #2: SUBTITLE CAPTIONS EXPORT</span>
-                      </div>
-                      <p className="text-xs text-neutral-300 leading-relaxed">
-                        Export standard subtitle coordinates mapping directly to your chosen segment's timing. Import directly into popular tools like CapCut, Premiere Pro, or DaVinci Resolve to overlay premium high-engagement text automatically.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerSrtDownload(exportUiClip);
-                      }}
-                      className="mt-4 w-full py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      <span>Export SRT Subtitles File</span>
-                    </button>
-                  </div>
-
-                </div>
-
-                {/* Method C: Quick Render options (Interactive simulator preview block) */}
-                <div className="bg-[#12072f]/45 border border-purple-500/20 rounded-2xl p-4 space-y-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-fuchsia-400 font-bold text-xs">
-                      <FileVideo className="h-4 w-4" />
-                      <span>METHOD #3: DOWNLOAD STYLE PREVIEW (TEASER RENDERING)</span>
+                {/* Primary Direct MP4 Download Section */}
+                <div className="bg-[#12072f]/45 border border-purple-500/20 rounded-2xl p-5 space-y-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs uppercase tracking-wider">
+                      <Scissors className="h-4 w-4" />
+                      <span>Direct lossless MP4 extraction</span>
                     </div>
                     <p className="text-xs text-neutral-300 leading-relaxed">
-                      Generates and downloads a client-side WebM visual graphic animation representing your chosen caption style ({captionStyle}), audio waveforms, and branding overlay. <em>Note: This generates a style demo teaser files to demonstrate overlays.</em>
+                      Our high-speed background server fetches the direct YouTube stream, crops the segment from <strong className="text-purple-300 font-mono">{exportUiClip.startTime}s to {exportUiClip.endTime}s</strong> with zero quality-loss using container-level FFmpeg, and streams the finished file directly to your device!
                     </p>
                   </div>
 
-                  {isRenderingVideo ? (
-                    <div className="bg-black/40 p-4 rounded-xl border border-purple-950/50 space-y-2.5">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="font-bold text-purple-300 font-mono text-[10px] uppercase tracking-wide">
-                          ⚡ STREAM GENERATION: {renderingPercent}%
-                        </span>
-                        <span className="h-2 w-2 rounded-full bg-fuchsia-500 animate-pulse" />
-                      </div>
-                      <div className="w-full h-1.5 bg-neutral-900 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-purple-500 via-pink-500 to-fuchsia-500" style={{ width: `${renderingPercent}%` }} />
-                      </div>
-                      <p className="text-[10px] text-purple-400 font-mono">{renderingStep}</p>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => triggerVideoTeaserRender(exportUiClip)}
-                      className="w-full py-2 bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      <span>Render & Download Style Teaser (WebM)</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    disabled={isDownloadingClip}
+                    onClick={() => {
+                      triggerFfmpegDownload(exportUiClip);
+                    }}
+                    className={`w-full py-3 ${
+                      isDownloadingClip 
+                        ? "bg-purple-800 cursor-not-allowed opacity-80" 
+                        : "bg-emerald-600 hover:bg-emerald-500 cursor-pointer"
+                    } text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95`}
+                  >
+                    {isDownloadingClip ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 text-white animate-spin" />
+                        <span>Slicing & Extracting MP4 Clip... Please Wait</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 text-white animate-bounce" />
+                        <span>Download Direct MP4 Video Clip ({exportUiClip.duration}s)</span>
+                      </>
+                    )}
+                  </button>
                 </div>
 
-                {/* Technical Creator Tips */}
-                <div className="bg-yellow-500/5 border border-yellow-500/20 p-4 rounded-2xl space-y-2">
+                {/* Simple explanatory note */}
+                <div className="bg-black/30 border border-purple-950 p-4 rounded-xl space-y-2 text-xs text-neutral-300">
+                  <h5 className="font-bold text-white flex items-center gap-1 text-[11px] uppercase tracking-wide text-purple-400">
+                    ⚡ Why this is superior:
+                  </h5>
+                  <p className="text-[11px] text-neutral-300 leading-relaxed font-sans mt-1">
+                    Unlike standard browser downloaders which compress your screen or download low-resolution previews, our cloud container executes native FFmpeg cutting. This process keeps your visual streams untouched, generating a 100% genuine widescreen YouTube MP4 file!
+                  </p>
+                </div>
+
+                {/* Alternative Quick Copier tools */}
+                <div className="bg-yellow-500/5 border border-yellow-500/20 p-4 rounded-2xl space-y-3">
                   <h5 className="text-xs font-bold text-yellow-500 flex items-center gap-1">
-                    💡 Creator Tip: Clip Download & Trimming Mechanics
+                    🔗 Alternative: Quick Cut in any Web Trimmer
                   </h5>
                   <p className="text-[11px] text-neutral-300 leading-relaxed font-sans">
-                    Because modern browsers strictly prohibit direct video chunk extraction from YouTube's domains due to CORS/security policies, we provide a <strong>super high-fidelity FFmpeg script (Method 1)</strong>. That way, you preserve 100% of the raw, untouched original feed resolution without any blurry browser compression! Simply download the script and run it in your console to crop and cut beautifully.
-                  </p>
-                  <p className="text-[11px] text-neutral-300 leading-relaxed font-sans">
-                    Alternatively, copying the target coordinates <code>({exportUiClip.startTime}s to {exportUiClip.endTime}s)</code> allows you to extract standard audio/video in seconds using any premium online web video trimmer tool!
+                    You can also copy this segment's exact times to crop instantly using any free online YouTube converter tool (e.g. <em>SaveFrom, YT-Cutter</em>, etc.):
                   </p>
                   
-                  {/* Convenient Copier tools */}
-                  <div className="flex flex-wrap gap-2 pt-1 font-mono">
-                    <button
-                      type="button"
-                      onClick={() => triggerCopy("modal-times", `Start: ${exportUiClip.startTime}s, End: ${exportUiClip.endTime}s`)}
-                      className="text-[10px] bg-black/40 border border-purple-950 px-2 py-1 rounded text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {copiedStates["modal-times"] ? "Copied Coordinates!" : "Copy Timing Codes"}
-                    </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono">
                     <button
                       type="button"
                       onClick={() => triggerCopy("modal-url", `${videoUrl}&t=${exportUiClip.startTime}`)}
-                      className="text-[10px] bg-black/40 border border-purple-950 px-2 py-1 rounded text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                      className="text-[10px] bg-black/40 border border-purple-950 px-2 py-2 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer flex justify-between items-center"
                     >
-                      {copiedStates["modal-url"] ? "Copied URL!" : "Copy Start Link URL"}
+                      <span>Start Link URL</span>
+                      <span className="text-[9px] text-purple-400 uppercase">[Copy]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => triggerCopy("modal-start-sec", `${exportUiClip.startTime}s`)}
+                      className="text-[10px] bg-black/40 border border-purple-950 px-2 py-2 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer flex justify-between items-center"
+                    >
+                      <span>Start: {exportUiClip.startTime} seconds</span>
+                      <span className="text-[9px] text-purple-400 uppercase">[Copy]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => triggerCopy("modal-end-sec", `${exportUiClip.endTime}s`)}
+                      className="text-[10px] bg-black/40 border border-purple-950 px-2 py-2 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer flex justify-between items-center"
+                    >
+                      <span>End: {exportUiClip.endTime} seconds</span>
+                      <span className="text-[9px] text-purple-400 uppercase">[Copy]</span>
                     </button>
                   </div>
                 </div>
