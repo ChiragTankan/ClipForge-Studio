@@ -215,6 +215,104 @@ async function startServer() {
 
   app.use(express.json());
 
+  // File-based persistence helper for shared clips
+  const SHARABLE_CLIPS_FILE = path.join(process.cwd(), "shared_clips.json");
+
+  function loadSharedClips(): Record<string, any> {
+    try {
+      if (fs.existsSync(SHARABLE_CLIPS_FILE)) {
+        const content = fs.readFileSync(SHARABLE_CLIPS_FILE, "utf-8");
+        return JSON.parse(content || "{}");
+      }
+    } catch (err) {
+      console.error("[Share] Failed to load shared clips:", err);
+    }
+    return {};
+  }
+
+  function saveSharedClips(clips: Record<string, any>) {
+    try {
+      fs.writeFileSync(SHARABLE_CLIPS_FILE, JSON.stringify(clips, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[Share] Failed to write shared clips:", err);
+    }
+  }
+
+  // API Route: Store a new shared clip configuration
+  app.post("/api/share-clip", (req, res) => {
+    try {
+      const clipData = req.body;
+      if (!clipData || !clipData.videoUrl || !clipData.title) {
+        return res.status(400).json({ error: "Missing required clip fields like title and videoUrl." });
+      }
+
+      // Load existing clips
+      const clips = loadSharedClips();
+
+      // Generate unique short ID: e.g. 6 chars base36
+      let shortId = "";
+      do {
+        shortId = Math.random().toString(36).substring(2, 8).toLowerCase();
+      } while (clips[shortId]);
+
+      // Save clip
+      clips[shortId] = {
+        id: shortId,
+        videoUrl: clipData.videoUrl,
+        title: clipData.title,
+        startTime: parseInt(clipData.startTime, 10) || 0,
+        endTime: parseInt(clipData.endTime, 10) || 30,
+        duration: clipData.duration || "0:30",
+        viralityScore: parseInt(clipData.viralityScore, 10) || 95,
+        description: clipData.description || "",
+        subtitles: clipData.subtitles || [],
+        ratio: clipData.ratio || "9:16",
+        color: clipData.color || "from-purple-600 to-fuchsia-600",
+        captionStyle: clipData.captionStyle || "hormozi",
+        watermarkText: clipData.watermarkText || "",
+        musicOverlay: clipData.musicOverlay || "none",
+        createdAt: new Date().toISOString()
+      };
+
+      saveSharedClips(clips);
+
+      // Build short URL dynamically
+      const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
+      const protocol = req.headers["x-forwarded-proto"] || "https";
+      
+      const shareUrl = `${protocol}://${host}/?clip=${shortId}`;
+
+      console.log(`[Share] Created share link: ${shareUrl} for ID ${shortId}`);
+      return res.json({
+        shortId,
+        shareUrl,
+        clip: clips[shortId]
+      });
+
+    } catch (err: any) {
+      console.error("[Share] Error saving clip:", err);
+      return res.status(500).json({ error: "Failed to initialize shared segment link." });
+    }
+  });
+
+  // API Route: Fetch shared clip configuration
+  app.get("/api/share-clip/:id", (req, res) => {
+    try {
+      const shortId = (req.params.id || "").toLowerCase();
+      const clips = loadSharedClips();
+      const clip = clips[shortId];
+
+      if (!clip) {
+        return res.status(404).json({ error: "Clip not found or link has expired." });
+      }
+
+      return res.json(clip);
+    } catch (err: any) {
+      console.error("[Share] Retrieve error:", err);
+      return res.status(500).json({ error: "Error retrieving shared highlight segment." });
+    }
+  });
+
   // API Route: Direct MP4 Video Clip Downloader & Slicer
   app.get("/api/download-clip", async (req, res) => {
     try {

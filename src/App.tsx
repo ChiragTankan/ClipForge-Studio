@@ -127,6 +127,55 @@ export default function App() {
   const [renderingPercent, setRenderingPercent] = useState(0);
   const [renderingStep, setRenderingStep] = useState("");
 
+  // States for short link sharer
+  const [sharedClipId, setSharedClipId] = useState<string | null>(null);
+  const [sharedClip, setSharedClip] = useState<any | null>(null);
+  const [loadingSharedClip, setLoadingSharedClip] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
+
+  const generateShareLink = async (clip: GeneratedClip) => {
+    if (isSharing) return;
+    setIsSharing(true);
+    setGeneratedShareUrl(null);
+    showToast("Generating short shareable link for this clip...", "info");
+
+    try {
+      const response = await fetch("/api/share-clip", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          videoUrl,
+          title: clip.title,
+          startTime: clip.startTime,
+          endTime: clip.endTime,
+          duration: clip.duration,
+          viralityScore: clip.viralityScore,
+          description: clip.description,
+          subtitles: clip.subtitles,
+          ratio: clip.ratio || outputRatio,
+          color: clip.color,
+          captionStyle,
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to store clip.");
+      }
+
+      const data = await response.json();
+      setGeneratedShareUrl(data.shareUrl);
+      showToast("Shareable link generated successfully!", "success");
+    } catch (e) {
+      showToast("Error generating short unique link.", "info");
+      console.error(e);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
   const handleUpdateSelectedClipRange = (newStart: number, newEnd: number) => {
     if (!selectedClip) return;
     if (newStart < 0) newStart = 0;
@@ -438,12 +487,45 @@ export default function App() {
     }
   };
 
-  // Pre-load default template clips matching Rickroll
+  // Check for shared clip parameter on component mount
   useEffect(() => {
-    const defaultClips = generateFallbackClips("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "9:16");
-    setClips(defaultClips);
-    setSelectedClip(defaultClips[0]);
-    setShowResults(true);
+    const params = new URLSearchParams(window.location.search);
+    const clipId = params.get("clip");
+    if (clipId) {
+      setSharedClipId(clipId);
+      const loadClipPayload = async () => {
+        setLoadingSharedClip(true);
+        try {
+          const res = await fetch(`/api/share-clip/${clipId}`);
+          if (!res.ok) {
+            throw new Error("Shared clip not found.");
+          }
+          const clipData = await res.json();
+          setSharedClip(clipData);
+          setVideoUrl(clipData.videoUrl);
+          setSelectedClip(clipData);
+          setClips([clipData]);
+          setShowResults(true);
+        } catch (err) {
+          console.error("Shared clip loading error:", err);
+          showToast("Shared clip has expired or was not found.", "info");
+          // load defaults instead
+          const defaultClips = generateFallbackClips("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "9:16");
+          setClips(defaultClips);
+          setSelectedClip(defaultClips[0]);
+          setShowResults(true);
+          setSharedClipId(null);
+        } finally {
+          setLoadingSharedClip(false);
+        }
+      };
+      loadClipPayload();
+    } else {
+      const defaultClips = generateFallbackClips("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "9:16");
+      setClips(defaultClips);
+      setSelectedClip(defaultClips[0]);
+      setShowResults(true);
+    }
   }, []);
 
   // Form link templates loader
@@ -538,6 +620,218 @@ export default function App() {
       }, 500);
     }
   };
+
+  if (loadingSharedClip) {
+    return (
+      <div className="min-h-screen bg-[#03000a] text-[#f5f3ff] flex flex-col items-center justify-center font-sans">
+        <div className="text-center space-y-4">
+          <RefreshCw className="h-10 w-10 text-purple-500 animate-spin mx-auto animate-spin-slow" />
+          <h3 className="text-base font-extrabold text-white">Loading Shared Creator Clip...</h3>
+          <p className="text-xs text-purple-300/60 font-mono">Retrieved from server-side stashing pool</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (sharedClipId && sharedClip) {
+    return (
+      <div className="min-h-screen bg-[#03000a] text-[#f5f3ff] flex flex-col font-sans selection:bg-purple-600/40 selection:text-purple-200">
+        {/* Glow effects in the background */}
+        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+          <div className="absolute top-[-10%] left-[20%] w-[600px] h-[600px] bg-purple-900/10 rounded-full blur-[160px]" />
+          <div className="absolute bottom-[10%] right-[10%] w-[500px] h-[500px] bg-fuchsia-900/10 rounded-full blur-[140px]" />
+        </div>
+
+        {/* Header Bar */}
+        <header className="border-b border-purple-950/40 bg-[#060212]/80 backdrop-blur-xl relative z-20">
+          <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-purple-600 to-fuchsia-600 flex items-center justify-center text-white shadow-[0_0_20px_rgba(168,85,247,0.4)]">
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] uppercase tracking-widest text-fuchsia-400 font-bold bg-fuchsia-500/10 px-2 py-0.5 rounded-full border border-fuchsia-500/20">SHARED STREAM</span>
+                  <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">• Active Clip</span>
+                </div>
+                <h1 className="text-sm sm:text-lg font-extrabold text-white tracking-tight -mt-0.5">
+                  ClipForge Studio
+                </h1>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                window.history.pushState({}, '', window.location.pathname);
+                setSharedClipId(null);
+                setSharedClip(null);
+              }}
+              className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-purple-900/30 hover:bg-purple-900/60 border border-purple-800 text-[11px] sm:text-xs text-purple-300 font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              <span>Reset & Create Yours</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Content Area */}
+        <main className="flex-1 max-w-4xl w-full mx-auto px-6 py-12 relative z-10 flex flex-col md:flex-row gap-8 items-center justify-center">
+          
+          {/* Vertical 9:16 Video Player Container */}
+          <div className="w-full max-w-[320px] aspect-[9/16] bg-[#0c0520] border-2 border-purple-500/30 rounded-[32px] overflow-hidden shadow-2xl relative flex flex-col shrink-0">
+            {/* Top Device Notch */}
+            <div className="absolute top-0 inset-x-0 h-6 bg-black/40 z-10 flex items-center justify-center">
+              <div className="w-16 h-3 bg-neutral-900 rounded-full border border-white/5" />
+            </div>
+
+            {/* Simulated Live Caption Subtitles overlay container */}
+            <div className="flex-1 w-full relative group">
+              <iframe
+                id="shared-youtube-iframe"
+                src={`https://www.youtube.com/embed/${getYouTubeId(sharedClip.videoUrl)}?autoplay=1&mute=1&playlist=${getYouTubeId(sharedClip.videoUrl)}&loop=1&start=${sharedClip.startTime}&end=${sharedClip.endTime}&controls=0`}
+                className="w-full h-full scale-[1.3] origin-center object-cover select-none pointer-events-none"
+                title="Shared Segment Teaser Player"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="no-referrer"
+              />
+
+              {/* High Retention Floating Captions Simulation Overlay */}
+              <div className="absolute inset-x-4 bottom-24 z-10 pointer-events-none text-center">
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold text-fuchsia-400 font-mono tracking-widest uppercase bg-black/60 px-2 py-1 rounded-md border border-fuchsia-500/20 backdrop-blur-sm">
+                    {sharedClip.captionStyle?.toUpperCase() || "HORMOZI"} STYLE CAPTIONS
+                  </span>
+                  
+                  {/* Rotating Live Subtitles Sub-card */}
+                  <div className="p-3 bg-black/75 border border-purple-500/20 rounded-xl max-w-[240px] mx-auto shadow-lg backdrop-blur-md">
+                    <p className="text-sm font-black text-yellow-300 tracking-tight uppercase leading-snug drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                      "{sharedClip.subtitles?.[0] || "Key viral highlight segment!"}"
+                    </p>
+                    <p className="text-xs font-semibold text-white mt-1 uppercase opacity-90">
+                      {sharedClip.subtitles?.[1]}
+                    </p>
+                    {sharedClip.subtitles?.[2] && (
+                      <p className="text-[10px] font-medium text-emerald-400 tracking-wide mt-0.5 uppercase">
+                        {sharedClip.subtitles?.[2]}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Watermark badge overlay */}
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 bg-black/60 border border-white/5 px-3 py-1 rounded-full backdrop-blur-sm">
+                <span className="text-[10px] font-mono text-neutral-400 font-bold tracking-wide">
+                  ⚡ shared via ClipForge
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Details / Showcase Information Card */}
+          <div className="flex-1 space-y-6 max-w-lg w-full text-left">
+            <div className="space-y-2.5">
+              <span className="text-xs font-mono font-bold text-fuchsia-400 bg-fuchsia-500/10 px-3 py-1 rounded-full border border-fuchsia-500/20 inline-block">
+                🎯 SHARED REPURPOSED HIGHLIGHT
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight leading-tight">
+                {sharedClip.title}
+              </h2>
+              <p className="text-sm text-neutral-400 leading-relaxed">
+                {sharedClip.description || "Synthesised from high retention video trends with automated layout metrics."}
+              </p>
+            </div>
+
+            {/* Segment Stats Board */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-neutral-950/40 border border-purple-950/55 p-4 rounded-2xl">
+                <span className="text-[10px] font-mono font-bold text-neutral-500 uppercase block tracking-wider">
+                  Timeline Segment
+                </span>
+                <span className="text-sm font-extrabold text-white font-mono mt-1 block">
+                  {Math.floor(sharedClip.startTime / 60)}m {sharedClip.startTime % 60}s → {Math.floor(sharedClip.endTime / 60)}m {sharedClip.endTime % 60}s
+                </span>
+              </div>
+              
+              <div className="bg-neutral-950/40 border border-purple-950/55 p-4 rounded-2xl">
+                <span className="text-[10px] font-mono font-bold text-neutral-500 uppercase block tracking-wider">
+                  Engagement Quality
+                </span>
+                <span className="text-sm font-extrabold text-emerald-400 font-mono mt-1 block flex items-center gap-1">
+                  <Zap className="h-4 w-4 text-emerald-400 fill-emerald-400 animate-bounce" />
+                  <span>{sharedClip.viralityScore}% Virality</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Source Reference & Original link */}
+            <div className="bg-purple-950/15 border border-purple-500/10 p-5 rounded-2xl space-y-3">
+              <h4 className="text-xs font-bold text-purple-300 flex items-center gap-1.5 uppercase tracking-wider">
+                <Youtube className="h-4.5 w-4.5 text-rose-500" />
+                <span>Original Source Stream</span>
+              </h4>
+              <p className="text-xs text-neutral-400 font-sans leading-relaxed line-clamp-1 bg-[#05010a] px-3 py-2 rounded-lg border border-purple-950 font-mono text-ellipsis overflow-hidden">
+                {sharedClip.videoUrl}
+              </p>
+              
+              <a
+                href={sharedClip.videoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-fuchsia-400 hover:text-fuchsia-300 transition-colors font-semibold"
+              >
+                <span>Watch original full long-form video on YouTube</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+
+            {/* Big Action CTA Buttons */}
+            <div className="space-y-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  window.history.pushState({}, '', window.location.pathname);
+                  setSharedClipId(null);
+                  setSharedClip(null);
+                  setVideoUrl(sharedClip.videoUrl);
+                }}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-purple-600 via-fuchsia-600 to-indigo-600 hover:opacity-90 text-white font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 text-center block"
+              >
+                <Sparkles className="h-4.5 w-4.5 text-white" />
+                <span>⚡ Repurpose Your Own YouTube Videos</span>
+              </button>
+            </div>
+          </div>
+
+        </main>
+
+        {/* styled footer */}
+        <footer className="border-t border-purple-950/40 bg-[#04010a] py-6 px-6 mt-16 text-xs text-neutral-500 relative z-10 text-center font-mono">
+          <p>© 2026 ClipForge Studio • Cloud Native Video Optimization Platform.</p>
+        </footer>
+
+        {/* Dynamic Toast Popup */}
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              className="fixed bottom-6 right-6 z-50 bg-[#070212]/95 border border-purple-500/30 px-5 py-4 rounded-2xl shadow-[0_10px_30px_rgba(139,92,246,0.15)] flex items-center gap-3.5 backdrop-blur-xl"
+            >
+              <div className="h-7 w-7 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 shrink-0">
+                <CheckCircle className="h-4.5 w-4.5 text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-[11px] font-black tracking-wider uppercase text-purple-300 font-mono">ClipForge Notification</p>
+                <p className="text-xs text-stone-200 mt-0.5 leading-relaxed">{toast.message}</p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#03000a] text-[#f5f3ff] flex flex-col font-sans selection:bg-purple-600/40 selection:text-purple-200">
@@ -1013,15 +1307,15 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Action buttons (Downloads) */}
+                        {/* Action buttons (Sharing & Links) */}
                         <div className="space-y-1.5 pt-2">
                           <button
                             type="button"
                             onClick={() => setExportUiClip(clip)}
                             className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg active:scale-95"
                           >
-                            <Download className="h-3.5 w-3.5 text-white animate-pulse" />
-                            <span>Download MP4 Clip ({clip.duration}s)</span>
+                            <Share2 className="h-3.5 w-3.5 text-white animate-pulse" />
+                            <span>Share Clip & Get Link ({clip.duration}s)</span>
                           </button>
                         </div>
                       </div>
@@ -1109,7 +1403,7 @@ export default function App() {
       {/* Creator Export Hub Modal */}
       <AnimatePresence>
         {exportUiClip && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto animate-fadeIn">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -1120,19 +1414,22 @@ export default function App() {
               <div className="bg-gradient-to-r from-[#17093b] to-[#0d0421] p-6 border-b border-purple-950 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400">
-                    <Download className="h-5 w-5 text-purple-400 animate-pulse" />
+                    <Share2 className="h-5 w-5 text-purple-400 animate-pulse" />
                   </div>
                   <div>
-                    <h3 className="text-base font-extrabold text-white tracking-tight">
-                      📥 Download MP4 Video Clip
+                    <h3 className="text-base font-extrabold text-white tracking-tight animate-pulse">
+                      🔗 Short Shareable Creator Link
                     </h3>
                     <p className="text-[11px] text-purple-300/80">
-                      Export this specific segment in uncompressed MP4 format directly from YouTube
+                      Publish and broadcast this customized highlight segment using a unique shortlink!
                     </p>
                   </div>
                 </div>
                 <button
-                  onClick={() => setExportUiClip(null)}
+                  onClick={() => {
+                    setExportUiClip(null);
+                    setGeneratedShareUrl(null);
+                  }}
                   className="p-1 px-2.5 py-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-all cursor-pointer border border-purple-950"
                   title="Close Dialog"
                 >
@@ -1167,61 +1464,100 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Primary Direct MP4 Download Section */}
+                {/* Primary Sharing Section */}
                 <div className="bg-[#12072f]/45 border border-purple-500/20 rounded-2xl p-5 space-y-4">
                   <div className="space-y-1.5">
-                    <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs uppercase tracking-wider">
-                      <Scissors className="h-4 w-4" />
-                      <span>Direct lossless MP4 extraction</span>
+                    <div className="flex items-center gap-1.5 text-fuchsia-400 font-bold text-xs uppercase tracking-wider">
+                      <Share2 className="h-4 w-4" />
+                      <span>Creator Link Generation</span>
                     </div>
                     <p className="text-xs text-neutral-300 leading-relaxed">
-                      Our high-speed background server fetches the direct YouTube stream, crops the segment from <strong className="text-purple-300 font-mono">{exportUiClip.startTime}s to {exportUiClip.endTime}s</strong> with zero quality-loss using container-level FFmpeg, and streams the finished file directly to your device!
+                      Publish a highly optimized, short shareable link for this exact video segment. Anyone opening this link will see a customized visual playback player highlighting <strong className="text-purple-300 font-mono">{exportUiClip.startTime}s to {exportUiClip.endTime}s</strong>!
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={isDownloadingClip}
-                    onClick={() => {
-                      triggerFfmpegDownload(exportUiClip);
-                    }}
-                    className={`w-full py-3 ${
-                      isDownloadingClip 
-                        ? "bg-purple-800 cursor-not-allowed opacity-80" 
-                        : "bg-emerald-600 hover:bg-emerald-500 cursor-pointer"
-                    } text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95`}
-                  >
-                    {isDownloadingClip ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 text-white animate-spin" />
-                        <span>Slicing & Extracting MP4 Clip... Please Wait</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="h-4 w-4 text-white animate-bounce" />
-                        <span>Download Direct MP4 Video Clip ({exportUiClip.duration}s)</span>
-                      </>
-                    )}
-                  </button>
+                  {generatedShareUrl ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={generatedShareUrl}
+                          className="flex-1 bg-[#05010d] text-xs font-mono text-purple-300 border border-purple-950 px-3 py-3 rounded-xl focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => triggerCopy("short-url", generatedShareUrl)}
+                          className="px-4 py-3 bg-purple-600 hover:bg-purple-500 text-white font-extrabold text-xs rounded-xl flex items-center gap-1 justify-center transition-colors cursor-pointer"
+                        >
+                          <span>{copiedStates["short-url"] ? "Copied!" : "Copy Link"}</span>
+                        </button>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <a
+                          href={generatedShareUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex-1 py-2.5 bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-[11px] font-bold rounded-lg text-center flex items-center justify-center gap-1 transition-all active:scale-[98%]"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 animate-bounce" />
+                          <span>Test Shared Link Screen</span>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => setGeneratedShareUrl(null)}
+                          className="px-3.5 py-2.5 border border-purple-900 text-purple-400 hover:text-white rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isSharing}
+                      onClick={() => {
+                        generateShareLink(exportUiClip);
+                      }}
+                      className={`w-full py-3 ${
+                        isSharing 
+                          ? "bg-purple-800 cursor-not-allowed opacity-80" 
+                          : "bg-fuchsia-600 hover:bg-fuchsia-500 cursor-pointer"
+                      } text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95`}
+                    >
+                      {isSharing ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 text-white animate-spin" />
+                          <span>Shortening Link Payload... Please Wait</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="h-4 w-4 text-white animate-bounce" />
+                          <span>Create Smart Short Shareable Link ({exportUiClip.duration}s)</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {/* Simple explanatory note */}
                 <div className="bg-black/30 border border-purple-950 p-4 rounded-xl space-y-2 text-xs text-neutral-300">
                   <h5 className="font-bold text-white flex items-center gap-1 text-[11px] uppercase tracking-wide text-purple-400">
-                    ⚡ Why this is superior:
+                    ⚡ Full Screen Shared Viewer:
                   </h5>
                   <p className="text-[11px] text-neutral-300 leading-relaxed font-sans mt-1">
-                    Unlike standard browser downloaders which compress your screen or download low-resolution previews, our cloud container executes native FFmpeg cutting. This process keeps your visual streams untouched, generating a 100% genuine widescreen YouTube MP4 file!
+                    Sharing creates an instantly loaded, lightweight viewer lock-frame featuring custom watermark markers, neon captions style simulations, and localized timestamps. This loop maximizes user click-through rate over standard raw MP4 files!
                   </p>
                 </div>
 
-                {/* Alternative Quick Copier tools */}
-                <div className="bg-yellow-500/5 border border-yellow-500/20 p-4 rounded-2xl space-y-3">
-                  <h5 className="text-xs font-bold text-yellow-500 flex items-center gap-1">
-                    🔗 Alternative: Quick Cut in any Web Trimmer
+                {/* Direct quick copier tools */}
+                <div className="bg-purple-950/20 border border-purple-900/30 p-4 rounded-2xl space-y-3">
+                  <h5 className="text-xs font-bold text-purple-400 flex items-center gap-1.5">
+                    🔗 Direct Segment Timeline Ref:
                   </h5>
-                  <p className="text-[11px] text-neutral-300 leading-relaxed font-sans">
-                    You can also copy this segment's exact times to crop instantly using any free online YouTube converter tool (e.g. <em>SaveFrom, YT-Cutter</em>, etc.):
+                  <p className="text-[11px] text-neutral-400 leading-relaxed font-sans">
+                    Optionally copy the precise timestamps to share in standard textual descriptions or manually crop inside other platform panels:
                   </p>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono">
@@ -1238,7 +1574,7 @@ export default function App() {
                       onClick={() => triggerCopy("modal-start-sec", `${exportUiClip.startTime}s`)}
                       className="text-[10px] bg-black/40 border border-purple-950 px-2 py-2 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer flex justify-between items-center"
                     >
-                      <span>Start: {exportUiClip.startTime} seconds</span>
+                      <span>Start: {exportUiClip.startTime}s</span>
                       <span className="text-[9px] text-purple-400 uppercase">[Copy]</span>
                     </button>
                     <button
@@ -1246,7 +1582,7 @@ export default function App() {
                       onClick={() => triggerCopy("modal-end-sec", `${exportUiClip.endTime}s`)}
                       className="text-[10px] bg-black/40 border border-purple-950 px-2 py-2 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer flex justify-between items-center"
                     >
-                      <span>End: {exportUiClip.endTime} seconds</span>
+                      <span>End: {exportUiClip.endTime}s</span>
                       <span className="text-[9px] text-purple-400 uppercase">[Copy]</span>
                     </button>
                   </div>
