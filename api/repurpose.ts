@@ -34,7 +34,7 @@ async function getYouTubeVideoMetadata(videoUrl: string): Promise<any> {
     throw new Error("Invalid YouTube URL provided.");
   }
 
-  const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "AIzaSyD9GSIUJjdE0URsfz5CJtVktSD8GSiG_no";
+  const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
   const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`;
 
   const response = await axios.get(apiUrl);
